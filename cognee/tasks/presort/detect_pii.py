@@ -177,10 +177,22 @@ class PiiAssessment(BaseModel):
     categories: list[PiiCategoryAssessment] = Field(default_factory=list)
 
 
+def _decode_sample_bytes(raw: bytes) -> str:
+    if raw.startswith((b"\x00\x00\xfe\xff", b"\xff\xfe\x00\x00")):
+        aligned = raw[: len(raw) - (len(raw) % 4)]
+        return aligned.decode("utf-32", errors="replace")
+    if raw.startswith((b"\xff\xfe", b"\xfe\xff")):
+        aligned = raw[: len(raw) - (len(raw) % 2)]
+        return aligned.decode("utf-16", errors="replace")
+    if raw.startswith(b"\xef\xbb\xbf"):
+        return raw.decode("utf-8-sig", errors="replace")
+    return raw.decode("utf-8", errors="replace")
+
+
 def _read_sample(record: FileRecord, max_sample_bytes: int) -> str | None:
     try:
         with open(record.path, "rb") as file:
-            return file.read(max_sample_bytes).decode("utf-8", errors="replace")
+            return _decode_sample_bytes(file.read(max_sample_bytes))
     except OSError as error:
         record.warnings.append(f"could not read sample for PII scan: {error}")
         return None

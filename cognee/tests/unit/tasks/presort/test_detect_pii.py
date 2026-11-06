@@ -131,3 +131,26 @@ async def test_llm_failure_is_swallowed(tmp_path):
     # Deterministic findings survive; the failure lands in record warnings.
     assert any(finding.source in ("filename", "content") for finding in findings)
     assert any("LLM PII assessment failed" in warning for warning in record.warnings)
+
+
+@pytest.mark.asyncio
+async def test_detect_pii_utf16_and_utf32_bom_files(tmp_path):
+    from cognee.tasks.presort.scan_folder import scan_folder
+
+    text = "Contact: jane.doe@example.com and IBAN DE89370400440532013000\n"
+    (tmp_path / "contact_utf8.txt").write_text(text, encoding="utf-8")
+    (tmp_path / "contact_utf16_le.txt").write_bytes(text.encode("utf-16"))
+    (tmp_path / "contact_utf16_be.txt").write_bytes(b"\xfe\xff" + text.encode("utf-16-be"))
+    (tmp_path / "contact_utf32.txt").write_bytes(text.encode("utf-32"))
+
+    files, _ = await scan_folder(tmp_path)
+    by_name = {f.name: f for f in files}
+    for name in ("contact_utf8.txt", "contact_utf16_le.txt", "contact_utf16_be.txt", "contact_utf32.txt"):
+        assert by_name[name].is_text is True, f"{name} should be recognized as text"
+
+    findings = await detect_pii(files)
+    for name in ("contact_utf8.txt", "contact_utf16_le.txt", "contact_utf16_be.txt", "contact_utf32.txt"):
+        path_str = by_name[name].path
+        cats = {x.category for x in findings if x.path == path_str}
+        assert "email_address" in cats, f"{name} missing email_address finding"
+        assert "bank_account" in cats, f"{name} missing bank_account finding"
